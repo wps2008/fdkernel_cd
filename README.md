@@ -6,7 +6,9 @@ githubの使い方がわからないのでおいおいソースファイルを�
 互換性を犠牲にしているのでインストール専用になります。  
  
 既知の不具合:  
-IDEのHDDを多重認識する@PC-486MV  
+ファイルシステムを認識しなくても  
+can't get drive parameters for drive xx  
+が出ない。
   
 FreeDOS DBCS kernel (for IBM PC and NEC PC-98 series)
 =====================================================
