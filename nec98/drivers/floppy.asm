@@ -374,16 +374,28 @@ arg drive, mode, {lba_address,4}, count_by_byte, {buffer,4}, scount
 		je	.scsi_sec_3
 
 		cmp	ah,2fh
-		jne	.scsi_disconnect
+		je	.scsi_mes
 
-		mov	ah,1fh
+		cmp	ah,2bh
+		jne	.scsi_nack
+
+		mov	ah,1bh
 		mov	cx,01h
 		push	ds
 		pop	es
 		mov	bx,di
 		int	1bh
 
-.scsi_disconnect:
+.scsi_mes:
+		mov	ah,1fh
+		mov	cx,01h
+		push	ds
+		pop	es
+		mov	bx,di
+		inc	di
+		int	1bh
+
+.scsi_nack:
 		mov	ah,03h
 		int	1bh
 		mov	ax,40h
