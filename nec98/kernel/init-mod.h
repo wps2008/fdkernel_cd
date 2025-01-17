@@ -117,7 +117,7 @@ intvec getvec(unsigned char intno);
 #define NLAST           5       /* last drive                   */
 #define NUMBUFF         8       /* Number of track buffers at INIT time     */
                                         /* -- must be at least 3        */
-#define MAX_HARD_DRIVE  8
+#define MAX_HARD_DRIVE  12	/*8*/
 #define NDEV            26      /* up to Z:                     */
 
 #include "config.h" /* config structure */
