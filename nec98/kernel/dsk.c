@@ -59,7 +59,7 @@ COUNT ASMPASCAL fl_setdisktype(WORD, WORD);
 COUNT ASMPASCAL fl_setmediatype(WORD, WORD, WORD);
 VOID ASMPASCAL fl_readkey(VOID);
 #if defined(NEC98) && USE_LBA
-COUNT ASMPASCAL fl_lba_readwrite_nec98(BYTE drive, WORD mode, ULONG lba_address, WORD count_by_byte, UBYTE FAR *buffer);
+COUNT ASMPASCAL fl_lba_readwrite_nec98(BYTE drive, WORD mode, ULONG lba_address, WORD count_by_byte, UBYTE FAR *buffer, UWORD count);
 #endif
 UWORD ASMPASCAL floppy_change(UWORD);
 #if defined(NEC98)
@@ -1467,15 +1467,15 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
         UWORD bytecnt = bytes_sector * count;
         if ((pddt->ddt_descflags & DF_WRTVERIFY) || mode != LBA_WRITE_VERIFY)
         {
-          error_code = fl_lba_readwrite_nec98(driveno, mode, LBA_address, bytecnt, transfer_address);
+          error_code = fl_lba_readwrite_nec98(driveno, mode, LBA_address, bytecnt, transfer_address, count);
         }
         else
         {
           /* verify requested, but not supported */
-          error_code = fl_lba_readwrite_nec98(driveno, LBA_WRITE, LBA_address, bytecnt, transfer_address);
+          error_code = fl_lba_readwrite_nec98(driveno, LBA_WRITE, LBA_address, bytecnt, transfer_address, count);
           if (error_code == 0)
           {
-            error_code = fl_lba_readwrite_nec98(driveno, LBA_VERIFY, LBA_address, bytecnt, transfer_address);
+            error_code = fl_lba_readwrite_nec98(driveno, LBA_VERIFY, LBA_address, bytecnt, transfer_address, count);
           }
         }
       }
