@@ -44,6 +44,8 @@ extern UWORD FAR SasiSectorBytes[4];  /* very important FAR */
 extern UWORD FAR ScsiSectorBytes[8];  /* very important FAR */
 extern WORD FAR maxsecsize;           /* very important FAR */
 extern UBYTE FAR FDtype[26];          /* very important FAR */
+extern COUNT ASMPASCAL fl_lba_readwrite_nec98(BYTE drive, WORD mode, ULONG lba_address, WORD count_by_byte, UBYTE FAR *buffer, UWORD count);
+extern COUNT ASMPASCAL fl_read(WORD, WORD, WORD, WORD, WORD, UBYTE FAR *);
 #endif
 
 #define PARTITION_TABLES_NEC98  16
@@ -739,7 +741,7 @@ void DosDefinePartition(struct DriveParamS *driveParam,
   /* the FileSystem type was internally converted to LBA_xxxx if a non-LBA partition
      above cylinder 1023 was found */
 #if defined(NEC98)
-  if (!GlobalLBA)
+  if (!ExtLBAForce)
 #else
   if (!InitKernelConfig.ForceLBA && !ExtLBAForce && !IsLBAPartition(pEntry->FileSystem))
 #endif
@@ -758,7 +760,7 @@ void DosDefinePartition(struct DriveParamS *driveParam,
     phys_bytes_sector = ScsiSectorBytes[driveParam->driveno & 0x7];
   {
   /* get actual sector size (for block device, not always same for BIOS) from the disk */
-    UWORD rc = GlobalLBA ? Read1LBASector(driveParam, driveParam->driveno, pEntry->RelSect, InitDiskTransferBuffer)
+    UWORD rc = ExtLBAForce ? Read1LBASector(driveParam, driveParam->driveno, pEntry->RelSect, InitDiskTransferBuffer)
                          : Read1CHSSector(driveParam, driveParam->driveno, pEntry->Begin.Cylinder, pEntry->Begin.Head, pEntry->Begin.Sector, InitDiskTransferBuffer);
     if (rc == 0) rc = *((UWORD FAR *)&InitDiskTransferBuffer[BT_BPB]);
     pddt->ddt_defbpb.bpb_nbyte = (rc == 256 || rc == 512 || rc == 1024 || rc == 2048 || rc == 4096) ? rc : 1024; /* todo: set proper value for BIOS in default */ 
@@ -914,7 +916,11 @@ void DosDefinePartition(struct DriveParamS *driveParam,
 /* Get the parameters of the hard disk */
 STATIC int LBA_Get_Drive_Parameters_nec98(int drive, struct DriveParamS *driveParam)
 {
-  iregs regs;
+  WORD pax = 0;
+  WORD pbx = 0;
+  WORD pcx = 0;
+  BYTE head = 0;
+  BYTE sect = 0;
 
   ExtLBAForce = TRUE;
   memset(driveParam, 0, sizeof *driveParam);
@@ -924,27 +930,118 @@ STATIC int LBA_Get_Drive_Parameters_nec98(int drive, struct DriveParamS *drivePa
   if (!drive)
     goto ErrorReturn;
   
-  /* wake up SASI(IDE) drives... */
-  if (is_daua_sasi(drive))
+
+__asm
   {
-    regs.a.b.h = 0x8e;
-    regs.a.b.l = drive;
-    init_call_intr(0x1b, &regs);
+	mov	al,BYTE PTR drive
+	mov	ah,al
+	and	ah,0xF0
+	cmp	ah,0x80
+	jne	_scsi_14
+
+//SASI,IDE‚È‚çint1b ah=8e
+	mov	ah,0x8e
+	int	1Bh
+  mov	ah,0x07
+	int	1Bh
+  jc _sense_err
+  jmp _get_dsense
+	  
+  //SCSI
+_scsi_14:
+  mov ah,0x04
+  int 1bh
+  jc _sense_err
+  mov ah,0x14
+  int 1bh
+  //jc _sense_err
+  cmp bl,00h
+  je _get_dsense
+  cmp bl,05h
+  jne _sense_err
+  //cd-rom
+  mov pbx,0x800
+  mov pcx,0x317
+  mov head,0x8
+  mov sect,0x11
+  jmp _dsense_ret
+
+  //sense 84
+_get_dsense:
+  mov ah,0x84
+  mov bl,0x01
+  xor dx,dx
+  int 1bh
+
+  jc _sense_err
+  cmp bl,0x00
+  jne _sense_sasi
+  mov pbx,bx
+  mov pcx,cx
+  mov head,dh
+  mov sect,dl
+_dsense_ret:  
+  jmp _d_sense_end
+
+_sense_err:
+  mov ax,0xffff
+  mov pax,ax
+  jmp _d_sense_end
+
+_sense_sasi:
+  mov pbx,0x100
+  mov pcx,0x266
+  mov head,0x04
+  mov sect,0x21
+  mov bx,ax
+  xor al,al
+  out 0x82,al
+  in al,0x82
+  xchg ah,al
+  mov al,0x40
+  out 0x82,al
+
+  test bl,01h
+  jnz _sasi_1
+  test ah,0x80
+  jnz _sasi_512b
+  jmp _sasi_cly
+
+_sasi_1:
+  test ah,0x40
+  jz _sasi_cly
+
+_sasi_512b:
+  mov pbx,0x200
+  mov sect,0x11
+
+_sasi_cly:
+  and bh,0x0f
+  cmp bh,0x00
+  jne _sasi_cly2
+  mov pcx,0x98;
+  jmp _dsense_ret
+  _sasi_cly2:
+  cmp bh,0x01
+  jne _sasi_cly3
+  mov pcx,0x135;
+  jmp _dsense_ret
+  _sasi_cly3:
+  mov head,0x08
+  cmp bh,0x03
+  jne _sasi_cly_ret
+  mov pcx,0x135;
+_sasi_cly_ret:
+_d_sense_end:
+
   }
 
-  regs.a.b.h = 0x84;
-  regs.a.b.l = drive;
-  regs.b.x = 256;
-  regs.d.x = 0;
-  init_call_intr(0x1b, &regs);
+  if(pax == 0xffff){goto ErrorReturn;}
+  driveParam->chs.Head = head;
+  driveParam->chs.Sector = sect;
+  driveParam->chs.Cylinder = pcx;
+  driveParam->sector_size = pbx;
 
-  if ((regs.flags & 0x01) || regs.d.x == 0)
-    goto ErrorReturn;
-
-  driveParam->chs.Head = regs.d.b.h;
-  driveParam->chs.Sector = regs.d.b.l;
-  driveParam->chs.Cylinder = regs.c.x;
-  driveParam->sector_size = regs.b.x;
   if (is_daua_sasi(drive))
   {
     if (InitKernelConfig.ForceLBA)
@@ -1288,26 +1385,21 @@ void BIOS_drive_reset(unsigned drive);
 #if defined(NEC98)
 static int Read1Sector(UBYTE driveno, UWORD param0, UWORD param1, void *buffer, UWORD read_bytes)
 {
-  iregs regs;
+  unsigned error_code;
   int num_retries;
 
   for (num_retries = 0; num_retries < N_RETRY; num_retries++)
   {
-    regs.a.b.h = 0x06;
-    regs.a.b.l = driveno;
-    regs.d.x = param1;
-    regs.c.x = param0;
-    regs.b.x = read_bytes;
-    regs.bp = FP_OFF(buffer);
-    regs.es = FP_SEG(buffer);
-
-    init_call_intr(0x1b, &regs);
-
-    if ((regs.flags & FLG_CARRY) == 0)
-      break;
-    BIOS_drive_reset(driveno);
+	if (driveno < 0x80 && is_daua_hd(driveno)){
+		error_code = fl_lba_readwrite_nec98(driveno, 0x0600, ((ULONG)param1 << 16) + param0, read_bytes, buffer , 1);
+ 	 } else {  
+    		error_code = fl_read(driveno, param1 >> 8 , param0, param1 & 0xFF, read_bytes, buffer);
+  	}
+  if (error_code == 0){ break; } else { BIOS_drive_reset(driveno); }
   }
-  return regs.flags & FLG_CARRY ? 1 : 0;
+
+if (error_code == 0){ return 0; } else { return 1; }
+
 }
 
 static int Read1LBASector(struct DriveParamS *driveParam, unsigned drive,
@@ -1315,8 +1407,8 @@ static int Read1LBASector(struct DriveParamS *driveParam, unsigned drive,
 {
   /* todo: support FD */
   UBYTE driveno = driveParam->driveno;
-  if (is_daua_hd(drive)) driveno &= 0x7f;
-  return Read1Sector(driveno, (UWORD)LBA_address, (UWORD)(LBA_address >> 16), buffer, 1024);
+  if (is_daua_hd(driveno)) driveno &= 0x7f;
+  return Read1Sector(driveno, (UWORD)LBA_address, (UWORD)(LBA_address >> 16), buffer, driveParam->sector_size);
 }
 
 static int Read1CHSSector(struct DriveParamS *driveParam, unsigned drive,
@@ -1324,7 +1416,7 @@ static int Read1CHSSector(struct DriveParamS *driveParam, unsigned drive,
 {
   /* todo: support FD */
   UNREFERENCED_PARAMETER(drive);
-  return Read1Sector(driveParam->driveno, cylinder, ((UWORD)head << 8) | sector, buffer, 1024);
+  return Read1Sector(driveParam->driveno, cylinder, ((UWORD)head << 8) | sector, buffer, driveParam->sector_size);
 }
 #else
 #error need platform specific Read1LBASector()
@@ -1351,7 +1443,7 @@ PartitionsField ProcessDisk(int scanType, unsigned drive, PartitionsField Partit
 
   if (!LBA_Get_Drive_Parameters(drive, &driveParam))
   {
-    printf("can't get drive parameters for drive %02x\n", drive);
+    /*printf("can't get drive parameters for drive %02x\n", drive);*/
     return PartitionsToIgnore;
   }
 
@@ -1580,7 +1672,6 @@ int BIOS_nfdrives_nec98(void)
 int BIOS_nrdrives_nec98(void)
 {
   UWORD equip;
-  UBYTE equips;
   int units, units_all;
   int i;
   
@@ -1591,11 +1682,12 @@ int BIOS_nrdrives_nec98(void)
     if (equip & (0x0100U << i))
       DauaHDs[units_all++] = DauaSASIs[units++] = 0x80 + i;
   }
-  equips = peekb(0, 0x482); /* DISK_EQUIPS */
+ 
+  /*SCSI 0000:0460*/
   for(i=0, units = 0; i<8; ++i)
   {
-    if (equips & (1U << i))
-      DauaHDs[units_all++] = DauaSCSIs[units++] = 0xA0 + i;
+    if (peekb(0, 0x460 + i * 4) != 0x00)
+      { DauaHDs[units_all++] = DauaSCSIs[units++] = 0xA0 + i; }
   }
   
   return units_all;
