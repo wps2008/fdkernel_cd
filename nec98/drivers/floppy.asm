@@ -273,21 +273,23 @@ arg drive, mode, {dap_p,4}
 %endif
 
 ;
-; COUNT ASMPASCAL fl_lba_readwrite_nec98(BYTE drive, WORD mode, ULONG lba_address, WORD count_by_byte, UBYTE FAR *buffer);
+; COUNT ASMPASCAL fl_lba_readwrite_nec98(BYTE drive, WORD mode, ULONG lba_address, WORD count_by_byte,  UBYTE FAR *buffer, UWORD count);
 ;
 %ifdef NEC98
 		global	FL_LBA_READWRITE_NEC98
 FL_LBA_READWRITE_NEC98:
 		push	bp
 		mov	bp, sp
-arg drive, mode, {lba_address,4}, count_by_byte, {buffer,4}
+
+arg drive, mode, {lba_address,4}, count_by_byte, {buffer,4}, scount
+
 		mov	al, [.drive]
 		and	al, 7fh
 		mov	dl, al
 		and	dl, 0f0h
 		jz	.hd		; sasi/ide (DAUA=0x)
 		cmp	dl, 20h		; scsi     (DAUA=2x)
-		jz	.hd
+		jz	.scsi
 .no_hd:
 		mov	ax, 40h		; error (Equipment check)
 		jmp	short .exit
@@ -304,12 +306,96 @@ arg drive, mode, {lba_address,4}, count_by_byte, {buffer,4}
 		xchg	al, ah
 		sbb	bx, bx
 		and	ax, bx
+.scsi_exit:
 		pop	es
 		pop	cx
 		pop	bx
 .exit:
 		pop	bp
-		ret	2 + 2 + 4 + 2 + 4
+		ret	2 + 2 + 4 + 2 + 4 + 2
+
+.scsi:
+		push	bx
+		push	cx
+		push	es
+		push	ds
+		push	di
+		sub	sp,10h
+		mov	di,sp
+		mov	cx,8h
+		xor	ax,ax
+.cdb_loop:
+		mov	ss:[di],ax
+		add	di,2
+		loop	.cdb_loop
+
+		mov	di,sp
+		cmp	byte [.mode + 1],05h
+		je	.scsi_write
+
+		mov	byte ss:[di+1h],44h
+		mov	byte ss:[di+4h],28h
+		jmp	.scsi_sec_2
+
+.scsi_write:
+		mov	byte ss:[di+1h],48h
+		mov	byte ss:[di+4h],2Ah
+
+.scsi_sec_2:
+		mov	byte ss:[di+2h],0Ah
+
+		mov	ax,[.lba_address + 2]
+		xchg	al,ah
+		mov	ss:[di+6h],ax
+		mov	ax,[.lba_address]
+		xchg	al,ah
+		mov	ss:[di+8h],ax
+
+		mov	ax,[.scount]
+		xchg	al,ah
+		mov	ss:[di+0bh],ax
+
+		mov	cx,[.count_by_byte]
+
+		mov	al, [.drive]
+		and	al,0fh
+		or	al,0c0h
+		mov	ah,09h
+
+		les	bx,[.buffer]
+
+		push	ss
+		pop	ds
+		mov	dx,di
+		
+		int	1bh
+
+		cmp	ah,06h
+		je	.scsi_sec_3
+
+		cmp	ah,2fh
+		jne	.scsi_disconnect
+
+		mov	ah,1fh
+		mov	cx,01h
+		push	ds
+		pop	es
+		mov	bx,di
+		int	1bh
+
+.scsi_disconnect:
+		mov	ah,03h
+		int	1bh
+		mov	ax,40h
+		jmp	.scsi_sec_4
+.scsi_sec_3:
+		xor	ax,ax
+.scsi_sec_4:
+		add	sp,10h
+		pop	di
+		pop	ds
+		jmp	.scsi_exit
+
 %endif
 
 ;
